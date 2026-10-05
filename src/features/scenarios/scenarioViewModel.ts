@@ -11,11 +11,54 @@ export interface ScenarioComparison {
   outcome: "faster" | "slower" | "equal";
 }
 
+function describeDependencyChanges(
+  before: RequestNode,
+  after: RequestNode,
+  baselineNodes: Map<string, RequestNode>,
+  comparisonNodes: Map<string, RequestNode>,
+): string[] {
+  const baselineDependencies = new Set(before.dependencyIds);
+  const comparisonDependencies = new Set(after.dependencyIds);
+  const changes: string[] = [];
+  const addedLine = (dependencyId: string): string => {
+    const target = comparisonNodes.get(dependencyId);
+    if (!baselineNodes.has(dependencyId))
+      return `${before.name} · 新增前置依赖：${target ? target.name : dependencyId}（该节点在基准方案中不存在）`;
+    const surviving = target ?? baselineNodes.get(dependencyId);
+    return surviving
+      ? `${before.name} · 新增前置依赖：${surviving.name}`
+      : `${before.name} · 新增前置依赖：已删除节点（${dependencyId}）`;
+  };
+  const removedLine = (dependencyId: string): string => {
+    const target = baselineNodes.get(dependencyId);
+    if (!comparisonNodes.has(dependencyId))
+      return `${before.name} · 移除前置依赖：${target ? target.name : dependencyId}（该节点在对照方案中不存在）`;
+    const surviving = target ?? comparisonNodes.get(dependencyId);
+    return surviving
+      ? `${before.name} · 移除前置依赖：${surviving.name}`
+      : `${before.name} · 移除前置依赖：已删除节点（${dependencyId}）`;
+  };
+  // 依赖按集合比较：取消勾选再重新勾上只改变数组顺序，集合不变，不算变化。
+  for (const dependencyId of new Set(after.dependencyIds)) {
+    if (!baselineDependencies.has(dependencyId))
+      changes.push(addedLine(dependencyId));
+  }
+  for (const dependencyId of new Set(before.dependencyIds)) {
+    if (!comparisonDependencies.has(dependencyId))
+      changes.push(removedLine(dependencyId));
+  }
+  return changes;
+}
+
 function describeNodeChanges(
   before: RequestNode,
   after: RequestNode,
+  baselineNodes: Map<string, RequestNode>,
+  comparisonNodes: Map<string, RequestNode>,
 ): string[] {
   const changes: string[] = [];
+  if (before.name !== after.name)
+    changes.push(`节点改名：${before.name} → ${after.name}`);
   if (before.durationMs !== after.durationMs)
     changes.push(
       `${before.name} · 耗时 ${before.durationMs} → ${after.durationMs} ms`,
@@ -38,8 +81,9 @@ function describeNodeChanges(
     );
   if (before.fallbackNodeId !== after.fallbackNodeId)
     changes.push(`${before.name} · 降级目标已调整`);
-  if (before.dependencyIds.join("|") !== after.dependencyIds.join("|"))
-    changes.push(`${before.name} · 前置依赖已调整`);
+  changes.push(
+    ...describeDependencyChanges(before, after, baselineNodes, comparisonNodes),
+  );
   return changes;
 }
 
@@ -55,7 +99,7 @@ export function compareScenarios(
     ...baseline.nodes.flatMap((node) => {
       const next = comparisonNodes.get(node.id);
       return next
-        ? describeNodeChanges(node, next)
+        ? describeNodeChanges(node, next, baselineNodes, comparisonNodes)
         : [`${node.name} · 已从对照方案移除`];
     }),
     ...comparison.nodes
